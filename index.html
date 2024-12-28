@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interview Assistant</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f4f4f9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .container {
+      max-width: 600px;
+      width: 100%;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #333;
+    }
+    .conversation {
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 10px;
+      height: 300px;
+      overflow-y: auto;
+      background: #f9f9f9;
+      margin-bottom: 20px;
+    }
+    .message {
+      margin-bottom: 15px;
+      line-height: 1.4;
+    }
+    .interviewer {
+      color: #3572f5;
+      font-weight: bold;
+    }
+    .assistant {
+      color: #555;
+      font-weight: bold;
+    }
+    .buttons {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      margin-bottom: 10px;
+    }
+    button {
+      background: #3572f5;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      font-size: 16px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2556c1;
+    }
+    button:disabled {
+      background: #bbb;
+      cursor: not-allowed;
+    }
+    #status {
+      margin-top: 10px;
+      color: #888;
+      font-size: 14px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Interview Assistant</h1>
+
+    <div class="conversation" id="conversation"></div>
+
+    <div class="buttons">
+      <button id="startBtn">Start Recording</button>
+      <button id="stopBtn" disabled>Stop Recording</button>
+    </div>
+
+    <p id="status"></p>
+  </div>
+
+  <script>
+    /***************************************************************
+     *   1) SETUP: Your OpenAI API Key & Basic Chat Parameters     *
+     ***************************************************************/
+    const OPENAI_API_KEY = "sk-EVNo2jT-z7UqSDi5DU8pRv8ezw35wYrct-Xp5Ht-BmT3BlbkFJtHLzn2gTCsaooEMAVsA8E6sReVkZLUagHTy2rLqIAA";
+
+    // System message to define conversation context
+    const SYSTEM_MESSAGE = {
+      role: "system",
+      content: (
+        "This a interview senario, The user is the interviewer asking questions, you are here to help the human to give answers to the questions  " +
+        " Think that you are a human and answer the questions clearly."
+      ),
+    };
+
+    // Keep track of the conversation in an array
+    let conversationHistory = [SYSTEM_MESSAGE];
+
+    /***************************************************************
+     *          2) WEB SPEECH API SETUP (SpeechRecognition)        *
+     ***************************************************************/
+    let SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition;
+    let isRecording = false;
+
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const conversationEl = document.getElementById("conversation");
+
+    // Check if browser supports SpeechRecognition
+    if (!SpeechRecognition) {
+      alert("Web Speech API is not supported in this browser. Please use Chrome or Edge.");
+    } else {
+      recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true; // keep the mic on until we stop it
+    }
+
+    /***************************************************************
+     *         3) START & STOP RECORDING USING TWO BUTTONS         *
+     ***************************************************************/
+    startBtn.addEventListener("click", () => {
+      if (!recognition) return;
+      isRecording = true;
+      recognition.start();
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      statusEl.textContent = "Listening (mic is on)...";
+    });
+
+    stopBtn.addEventListener("click", () => {
+      if (!recognition) return;
+      isRecording = false;
+      recognition.stop();
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+      statusEl.textContent = "Microphone is off.";
+    });
+
+    /***************************************************************
+     *          4) HANDLE RESULTS (TRANSCRIPTS) & SEND TO AI       *
+     ***************************************************************/
+    recognition.onresult = function (event) {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        transcript += result[0].transcript;
+        // If it's final, we treat it as a complete question
+        if (result.isFinal) {
+          const interviewerQuestion = transcript.trim();
+          if (interviewerQuestion) {
+            addMessageToUI("interviewer", interviewerQuestion);
+            sendToOpenAI(interviewerQuestion);
+          }
+        }
+      }
+    };
+
+    recognition.onerror = function (event) {
+      console.error("SpeechRecognition Error:", event.error);
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+      statusEl.textContent = "Error: " + event.error;
+      isRecording = false;
+    };
+
+    // If recognition ends for some reason, handle it
+    recognition.onend = function () {
+      if (isRecording) {
+        // If we still want to record, start again
+        recognition.start();
+      }
+    };
+
+    /***************************************************************
+     *           5) SEND INTERVIEWER'S QUESTION TO OPENAI          *
+     ***************************************************************/
+    async function sendToOpenAI(userText) {
+      // 1) Add question to conversation
+      conversationHistory.push({ role: "user", content: userText });
+
+      // 2) Prepare request body
+      const requestBody = {
+        model: "gpt-3.5-turbo",
+        messages: conversationHistory,
+        temperature: 0.7,
+      };
+
+      try {
+        // 3) Make fetch call to OpenAI
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          throw new Error(`OpenAI API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const assistantResponse = data.choices[0].message.content.trim();
+
+        // 4) Display assistant's response
+        addMessageToUI("assistant", assistantResponse);
+
+        // 5) Add assistant's response to conversation history
+        conversationHistory.push({ role: "assistant", content: assistantResponse });
+
+      } catch (error) {
+        console.error("Error calling OpenAI:", error);
+        addMessageToUI("assistant", "Error: Unable to connect to OpenAI.");
+      }
+    }
+
+    /***************************************************************
+     *        6) HELPER: DISPLAY MESSAGES IN THE CONVERSATION      *
+     ***************************************************************/
+    function addMessageToUI(role, text) {
+      const messageDiv = document.createElement("div");
+      messageDiv.classList.add("message");
+
+      if (role === "interviewer") {
+        // We'll store it as role:"user" in the conversation,
+        // but show "Interviewer" in the UI
+        messageDiv.innerHTML = `<span class="interviewer">(Interviewer):</span> ${text}`;
+      } else {
+        // Assistant role -> "Your Answer"
+        messageDiv.innerHTML = `<span class="assistant">(Your Answer):</span> ${text}`;
+      }
+
+      conversationEl.appendChild(messageDiv);
+      conversationEl.scrollTop = conversationEl.scrollHeight;
+    }
+  </script>
+</body>
+</html>
